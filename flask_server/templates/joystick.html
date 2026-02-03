@@ -1,13 +1,20 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
     <title>DroneFC Controller</title>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.5.4/socket.io.min.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/nipplejs/0.10.1/nipplejs.min.js"></script>
+    <script src="/flask_server/static/js/socket.io.min.js"></script>
+    <script src="/flask_server/static/js/nipplejs.min.js"></script>
+
     <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
             background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
@@ -15,30 +22,40 @@
             min-height: 100vh;
             touch-action: none;
         }
+
         .header {
             text-align: center;
             padding: 20px;
-            background: rgba(0,0,0,0.3);
+            background: rgba(0, 0, 0, 0.3);
         }
+
         .header h1 {
             font-size: 24px;
             margin-bottom: 10px;
         }
+
         .status {
             display: flex;
             justify-content: center;
             gap: 20px;
             flex-wrap: wrap;
         }
+
         .status-item {
-            background: rgba(255,255,255,0.1);
+            background: rgba(255, 255, 255, 0.1);
             padding: 8px 16px;
             border-radius: 20px;
             font-size: 14px;
         }
-        .armed { background: #4CAF50 !important; }
-        .disarmed { background: #f44336 !important; }
-        
+
+        .armed {
+            background: #4CAF50 !important;
+        }
+
+        .disarmed {
+            background: #f44336 !important;
+        }
+
         .controls {
             display: flex;
             justify-content: space-between;
@@ -49,13 +66,15 @@
             right: 0;
             height: 300px;
         }
+
         .joystick-zone {
             width: 45%;
             height: 100%;
-            background: rgba(255,255,255,0.05);
+            background: rgba(255, 255, 255, 0.05);
             border-radius: 20px;
             position: relative;
         }
+
         .joystick-label {
             position: absolute;
             top: 10px;
@@ -64,7 +83,7 @@
             font-size: 12px;
             opacity: 0.7;
         }
-        
+
         .buttons {
             display: flex;
             justify-content: center;
@@ -72,6 +91,7 @@
             padding: 20px;
             flex-wrap: wrap;
         }
+
         .btn {
             padding: 15px 30px;
             font-size: 16px;
@@ -81,12 +101,31 @@
             font-weight: bold;
             transition: transform 0.1s;
         }
-        .btn:active { transform: scale(0.95); }
-        .btn-arm { background: #4CAF50; color: white; }
-        .btn-disarm { background: #f44336; color: white; }
-        .btn-takeoff { background: #2196F3; color: white; }
-        .btn-land { background: #FF9800; color: white; }
-        
+
+        .btn:active {
+            transform: scale(0.95);
+        }
+
+        .btn-arm {
+            background: #4CAF50;
+            color: white;
+        }
+
+        .btn-disarm {
+            background: #f44336;
+            color: white;
+        }
+
+        .btn-takeoff {
+            background: #2196F3;
+            color: white;
+        }
+
+        .btn-land {
+            background: #FF9800;
+            color: white;
+        }
+
         .telemetry {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(100px, 1fr));
@@ -95,23 +134,27 @@
             max-width: 600px;
             margin: 0 auto;
         }
+
         .telem-item {
-            background: rgba(255,255,255,0.1);
+            background: rgba(255, 255, 255, 0.1);
             padding: 15px;
             border-radius: 10px;
             text-align: center;
         }
+
         .telem-value {
             font-size: 24px;
             font-weight: bold;
             color: #4fc3f7;
         }
+
         .telem-label {
             font-size: 12px;
             opacity: 0.7;
         }
     </style>
 </head>
+
 <body>
     <div class="header">
         <h1>🚁 DroneFC Controller</h1>
@@ -121,14 +164,14 @@
             <div id="connectionStatus" class="status-item">Connecting...</div>
         </div>
     </div>
-    
+
     <div class="buttons">
         <button class="btn btn-arm" onclick="arm()">ARM</button>
         <button class="btn btn-disarm" onclick="disarm()">DISARM</button>
         <button class="btn btn-takeoff" onclick="takeoff()">TAKEOFF</button>
         <button class="btn btn-land" onclick="land()">LAND</button>
     </div>
-    
+
     <div class="telemetry">
         <div class="telem-item">
             <div id="altValue" class="telem-value">0</div>
@@ -147,7 +190,7 @@
             <div class="telem-label">Throttle</div>
         </div>
     </div>
-    
+
     <div class="controls">
         <div id="leftJoystick" class="joystick-zone">
             <div class="joystick-label">Throttle / Yaw</div>
@@ -160,7 +203,7 @@
     <script>
         // Socket.IO connection
         const socket = io();
-        
+
         // Joystick state
         let joystickData = {
             throttle: 1000,
@@ -168,7 +211,7 @@
             pitch: 0,
             yaw: 0
         };
-        
+
         // Left joystick: Throttle (Y) and Yaw (X)
         const leftJoystick = nipplejs.create({
             zone: document.getElementById('leftJoystick'),
@@ -177,24 +220,24 @@
             color: '#4fc3f7',
             size: 120
         });
-        
+
         leftJoystick.on('move', (evt, data) => {
             // Y axis -> Throttle (1000-2000)
             // Flip Y because up is negative in nipplejs
             const throttleNorm = -Math.sin(data.angle.radian) * (data.force / 2);
             joystickData.throttle = Math.round(1500 + throttleNorm * 500);
             joystickData.throttle = Math.max(1000, Math.min(2000, joystickData.throttle));
-            
+
             // X axis -> Yaw rate (-180 to 180)
             const yawNorm = Math.cos(data.angle.radian) * (data.force / 2);
             joystickData.yaw = Math.round(yawNorm * 180);
         });
-        
+
         leftJoystick.on('end', () => {
             // Keep throttle where it is, zero out yaw
             joystickData.yaw = 0;
         });
-        
+
         // Right joystick: Pitch (Y) and Roll (X)
         const rightJoystick = nipplejs.create({
             zone: document.getElementById('rightJoystick'),
@@ -203,28 +246,28 @@
             color: '#4fc3f7',
             size: 120
         });
-        
+
         rightJoystick.on('move', (evt, data) => {
             // Y axis -> Pitch (forward = positive)
             const pitchNorm = -Math.sin(data.angle.radian) * (data.force / 2);
             joystickData.pitch = Math.round(pitchNorm * 30);
-            
+
             // X axis -> Roll (right = positive)
             const rollNorm = Math.cos(data.angle.radian) * (data.force / 2);
             joystickData.roll = Math.round(rollNorm * 30);
         });
-        
+
         rightJoystick.on('end', () => {
             joystickData.roll = 0;
             joystickData.pitch = 0;
         });
-        
+
         // Send joystick data at 20Hz
         setInterval(() => {
             socket.emit('joystick', joystickData);
             document.getElementById('thrValue').textContent = joystickData.throttle;
         }, 50);
-        
+
         // Receive telemetry
         socket.on('telemetry', (data) => {
             if (data.alt !== undefined) {
@@ -242,38 +285,39 @@
                 el.className = 'status-item ' + (data.armed ? 'armed' : 'disarmed');
             }
         });
-        
+
         socket.on('connect', () => {
             document.getElementById('connectionStatus').textContent = 'Connected';
             document.getElementById('connectionStatus').style.background = '#4CAF50';
         });
-        
+
         socket.on('disconnect', () => {
             document.getElementById('connectionStatus').textContent = 'Disconnected';
             document.getElementById('connectionStatus').style.background = '#f44336';
         });
-        
+
         // Button functions
         function arm() {
             fetch('/arm', { method: 'POST' });
         }
-        
+
         function disarm() {
             fetch('/disarm', { method: 'POST' });
             joystickData.throttle = 1000;
         }
-        
+
         function takeoff() {
-            fetch('/takeoff', { 
+            fetch('/takeoff', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ altitude: 1.0 })
             });
         }
-        
+
         function land() {
             fetch('/land', { method: 'POST' });
         }
     </script>
 </body>
+
 </html>
