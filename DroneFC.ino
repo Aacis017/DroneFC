@@ -301,101 +301,148 @@ bool checkPreArmSafety() {
 // =========================================================
 // ================= COMMAND PROCESSING ====================
 // =========================================================
-// Compatible with Flask app format:
-//   ARM
-//   DISARM
-//   CMD,roll,pitch,throttle,yaw
-//   STATUS
+// JSON-based commands from Flask server:
+//   {"cmd":"arm"}
+//   {"cmd":"disarm"}
+//   {"cmd":"rc","t":1500,"r":0,"p":0,"y":0}
+//   {"cmd":"status"}
+//   {"cmd":"takeoff","alt":1.0}
+//   {"cmd":"land"}
 
-void processCommand(const char* line) {
+void sendJsonResponse(const char* status, const char* message) {
+    StaticJsonDocument<128> resp;
+    resp["status"] = status;
+    resp["msg"] = message;
+    serializeJson(resp, FLIGHT_SERIAL);
+    FLIGHT_SERIAL.println();
+    
+    // Also send to debug serial
+    serializeJson(resp, DEBUG_SERIAL);
+    DEBUG_SERIAL.println();
+}
+
+void processJsonCommand(const char* json) {
     lastCommandTime = millis();
     
+    StaticJsonDocument<256> doc;
+    DeserializationError error = deserializeJson(doc, json);
+    
+    if (error) {
+        DEBUG_SERIAL.print(F("[DEBUG] JSON parse error: "));
+        DEBUG_SERIAL.println(error.c_str());
+        DEBUG_SERIAL.print(F("[DEBUG] Raw input: "));
+        DEBUG_SERIAL.println(json);
+        sendJsonResponse("error", "JSON parse failed");
+        return;
+    }
+    
+    const char* cmd = doc["cmd"];
+    if (!cmd) {
+        DEBUG_SERIAL.println(F("[DEBUG] No 'cmd' field in JSON"));
+        sendJsonResponse("error", "No cmd field");
+        return;
+    }
+    
+    DEBUG_SERIAL.print(F("[DEBUG] Received command: "));
+    DEBUG_SERIAL.println(cmd);
+    
     // ========== ARM ==========
-    if (strcmp(line, "ARM") == 0 || strcmp(line, "a") == 0) {
+    if (strcmp(cmd, "arm") == 0) {
         if (!armed && checkPreArmSafety()) {
             armed = true;
             DEBUG_SERIAL.println(F("✅ Motors ARMED - BE CAREFUL!"));
-            FLIGHT_SERIAL.println(F("✅ Motors ARMED - BE CAREFUL!"));
-        } else if (!armed) {
+            sendJsonResponse("ok", "Armed");
+        } else if (armed) {
+            sendJsonResponse("ok", "Already armed");
+        } else {
             DEBUG_SERIAL.println(F("❌ Pre-arm checks FAILED"));
-            FLIGHT_SERIAL.println(F("❌ Pre-arm checks FAILED"));
+            sendJsonResponse("error", "Pre-arm check failed");
         }
         return;
     }
     
     // ========== DISARM ==========
-    if (strcmp(line, "DISARM") == 0 || strcmp(line, "d") == 0) {
+    if (strcmp(cmd, "disarm") == 0) {
         armed = false;
         disarmMotors();
         DEBUG_SERIAL.println(F("🔴 Motors DISARMED"));
-        FLIGHT_SERIAL.println(F("🔴 Motors DISARMED"));
+        sendJsonResponse("ok", "Disarmed");
         return;
     }
     
     // ========== STATUS ==========
-    if (strcmp(line, "STATUS") == 0) {
-        FLIGHT_SERIAL.print(F("STATUS,"));
-        FLIGHT_SERIAL.print(armed ? "ARMED" : "DISARMED");
-        FLIGHT_SERIAL.print(F(","));
-        FLIGHT_SERIAL.print(12.0);  // Placeholder voltage
-        FLIGHT_SERIAL.print(F(","));
-        FLIGHT_SERIAL.print(angle[ROLL] / 10.0);
-        FLIGHT_SERIAL.print(F(","));
-        FLIGHT_SERIAL.println(angle[PITCH] / 10.0);
+    if (strcmp(cmd, "status") == 0) {
+        StaticJsonDocument<256> resp;
+        resp["status"] = "ok";
+        resp["armed"] = armed;
+        resp["mode"] = currentMode;
+        resp["roll"] = angle[ROLL] / 10.0;
+        resp["pitch"] = angle[PITCH] / 10.0;
+        resp["alt"] = EstAlt;
+        resp["throttle"] = rcCommand[THROTTLE];
+        serializeJson(resp, FLIGHT_SERIAL);
+        FLIGHT_SERIAL.println();
         return;
     }
     
-    // ========== CMD,roll,pitch,throttle,yaw ==========
-    if (strncmp(line, "CMD,", 4) == 0) {
-        float roll = 0, pitch = 0, throttle = 1000, yaw = 0;
-        
-        // Parse: CMD,roll,pitch,throttle,yaw
-        char* ptr = (char*)line + 4;
-        char* comma1 = strchr(ptr, ',');
-        char* comma2 = comma1 ? strchr(comma1 + 1, ',') : NULL;
-        char* comma3 = comma2 ? strchr(comma2 + 1, ',') : NULL;
-        
-        if (comma1 && comma2 && comma3) {
-            *comma1 = '\0';
-            *comma2 = '\0';
-            *comma3 = '\0';
-            
-            roll = atof(ptr);
-            pitch = atof(comma1 + 1);
-            throttle = atof(comma2 + 1);
-            yaw = atof(comma3 + 1);
+    // ========== RC INPUT (NippleJS joystick) ==========
+    // Format: {"cmd":"rc","t":1500,"r":0,"p":0,"y":0}
+    if (strcmp(cmd, "rc") == 0) {
+        // Throttle
+        if (doc.containsKey("t")) {
+            int thr = doc["t"] | MIN_THROTTLE;
+            rcCommand[THROTTLE] = constrain(thr, MIN_THROTTLE, MAX_THROTTLE);
         }
         
-        // Convert to rcCommand format
-        // Roll/Pitch: ±45 degrees from joystick -> ±500 for MultiWii
-        rcCommand[ROLL] = constrain((int)(roll * 11.11f), -500, 500);
-        rcCommand[PITCH] = constrain((int)(pitch * 11.11f), -500, 500);
-        rcCommand[YAW] = constrain((int)(yaw * 11.11f), -500, 500);
-        rcCommand[THROTTLE] = constrain((int)throttle, MIN_THROTTLE, MAX_THROTTLE);
+        // Roll (from right joystick X axis) - convert degrees to rcCommand
+        if (doc.containsKey("r")) {
+            float roll = doc["r"] | 0.0f;
+            rcCommand[ROLL] = constrain((int)(roll * 16.67f), -500, 500);  // ±30 deg -> ±500
+        }
         
-        // Send ACK with telemetry
-        FLIGHT_SERIAL.print(F("ACK,"));
-        FLIGHT_SERIAL.print(roll, 2); FLIGHT_SERIAL.print(F(","));
-        FLIGHT_SERIAL.print(pitch, 2); FLIGHT_SERIAL.print(F(","));
-        FLIGHT_SERIAL.print(throttle, 0); FLIGHT_SERIAL.print(F(","));
-        FLIGHT_SERIAL.print(yaw, 2); FLIGHT_SERIAL.print(F(","));
-        FLIGHT_SERIAL.print(angle[ROLL] / 10.0, 2); FLIGHT_SERIAL.print(F(","));
-        FLIGHT_SERIAL.print(angle[PITCH] / 10.0, 2); FLIGHT_SERIAL.print(F(","));
-        FLIGHT_SERIAL.print(12.0, 2); FLIGHT_SERIAL.print(F(","));  // Placeholder voltage
-        FLIGHT_SERIAL.println(50);  // Placeholder battery %
+        // Pitch (from right joystick Y axis)
+        if (doc.containsKey("p")) {
+            float pitch = doc["p"] | 0.0f;
+            rcCommand[PITCH] = constrain((int)(pitch * 16.67f), -500, 500);
+        }
         
+        // Yaw rate (from left joystick X axis)
+        if (doc.containsKey("y")) {
+            float yaw = doc["y"] | 0.0f;
+            rcCommand[YAW] = constrain((int)(yaw * 2.78f), -500, 500);  // ±180 deg -> ±500
+        }
+        
+        // No response for RC commands - they come at high frequency (20Hz)
         return;
     }
     
-    // ========== AUTO_START / AUTO_END (for autonomous flight) ==========
-    if (strcmp(line, "AUTO_START") == 0) {
-        DEBUG_SERIAL.println(F("📍 Autonomous mode STARTED"));
+    // ========== TAKEOFF ==========
+    if (strcmp(cmd, "takeoff") == 0) {
+        if (!armed) {
+            sendJsonResponse("error", "Not armed");
+            return;
+        }
+        float alt = doc["alt"] | 1.0f;
+        AltHold = constrain((int32_t)(alt * 100), 50, 1000);  // Convert m to cm
+        currentMode = MODE_ALT_HOLD;
+        DEBUG_SERIAL.print(F("[DEBUG] Takeoff to altitude: "));
+        DEBUG_SERIAL.println(alt);
+        sendJsonResponse("ok", "Takeoff started");
         return;
     }
-    if (strcmp(line, "AUTO_END") == 0) {
-        DEBUG_SERIAL.println(F("📍 Autonomous mode ENDED"));
+    
+    // ========== LAND ==========
+    if (strcmp(cmd, "land") == 0) {
+        currentMode = MODE_LAND;
+        DEBUG_SERIAL.println(F("[DEBUG] Landing initiated"));
+        sendJsonResponse("ok", "Landing started");
         return;
     }
+    
+    // ========== Unknown command ==========
+    DEBUG_SERIAL.print(F("[DEBUG] Unknown command: "));
+    DEBUG_SERIAL.println(cmd);
+    sendJsonResponse("error", "Unknown command");
 }
 
 void processSerial() {
@@ -408,7 +455,9 @@ void processSerial() {
         if (c == '\n' || c == '\r') {
             if (bufIdx > 0) {
                 buffer[bufIdx] = '\0';
-                processCommand(buffer);
+                DEBUG_SERIAL.print(F("[DEBUG] UART RX: "));
+                DEBUG_SERIAL.println(buffer);
+                processJsonCommand(buffer);
                 bufIdx = 0;
             }
         } else if (bufIdx < 255) {
@@ -416,13 +465,29 @@ void processSerial() {
         }
     }
     
-    // Also read from USB for debugging
+    // Also read from USB for debugging (supports both JSON and simple commands)
     while (DEBUG_SERIAL.available()) {
         char c = DEBUG_SERIAL.read();
         if (c == '\n' || c == '\r') {
             if (bufIdx > 0) {
                 buffer[bufIdx] = '\0';
-                processCommand(buffer);
+                
+                // Check if it's JSON (starts with {)
+                if (buffer[0] == '{') {
+                    processJsonCommand(buffer);
+                } else {
+                    // Simple debug commands: a=arm, d=disarm, s=status
+                    if (buffer[0] == 'a') {
+                        processJsonCommand("{\"cmd\":\"arm\"}");
+                    } else if (buffer[0] == 'd') {
+                        processJsonCommand("{\"cmd\":\"disarm\"}");
+                    } else if (buffer[0] == 's') {
+                        processJsonCommand("{\"cmd\":\"status\"}");
+                    } else {
+                        DEBUG_SERIAL.print(F("[DEBUG] Unknown input: "));
+                        DEBUG_SERIAL.println(buffer);
+                    }
+                }
                 bufIdx = 0;
             }
         } else if (bufIdx < 255) {
@@ -689,22 +754,20 @@ void loop() {
     // Mix motors
     mixTable();
     
-    // Send telemetry at 10Hz - format: TELEM,roll,pitch,yaw,thr,voltage,battery%,armed
+    // Send telemetry at 10Hz - JSON format for Flask server
     if (millis() - lastTelemetryTime > 100) {
-        FLIGHT_SERIAL.print(F("TELEM,"));
-        FLIGHT_SERIAL.print(angle[ROLL] / 10.0, 2);   // Roll in degrees
-        FLIGHT_SERIAL.print(F(","));
-        FLIGHT_SERIAL.print(angle[PITCH] / 10.0, 2);  // Pitch in degrees
-        FLIGHT_SERIAL.print(F(","));
-        FLIGHT_SERIAL.print(gyroADC[YAW] / GYRO_SCALE, 2);  // Yaw rate
-        FLIGHT_SERIAL.print(F(","));
-        FLIGHT_SERIAL.print(rcCommand[THROTTLE]);     // Throttle
-        FLIGHT_SERIAL.print(F(","));
-        FLIGHT_SERIAL.print(12.0, 2);                 // Voltage (placeholder)
-        FLIGHT_SERIAL.print(F(","));
-        FLIGHT_SERIAL.print(50);                      // Battery % (placeholder)
-        FLIGHT_SERIAL.print(F(","));
-        FLIGHT_SERIAL.println(armed ? "1" : "0");     // Armed status
+        StaticJsonDocument<256> telem;
+        telem["type"] = "telemetry";
+        telem["roll"] = angle[ROLL];       // 0.1 degree units
+        telem["pitch"] = angle[PITCH];     // 0.1 degree units
+        telem["yaw"] = (int)(gyroADC[YAW] / GYRO_SCALE);  // Yaw rate
+        telem["thr"] = rcCommand[THROTTLE];
+        telem["alt"] = EstAlt;             // cm
+        telem["armed"] = armed;
+        telem["mode"] = currentMode;
+        
+        serializeJson(telem, FLIGHT_SERIAL);
+        FLIGHT_SERIAL.println();
         
         lastTelemetryTime = millis();
     }

@@ -232,11 +232,14 @@
             // X axis -> Yaw rate (-180 to 180)
             const yawNorm = Math.cos(data.angle.radian) * (data.force / 2);
             joystickData.yaw = Math.round(yawNorm * 180);
+
+            console.log('[DEBUG] Left Joystick - Throttle:', joystickData.throttle, 'Yaw:', joystickData.yaw);
         });
 
         leftJoystick.on('end', () => {
             // Keep throttle where it is, zero out yaw
             joystickData.yaw = 0;
+            console.log('[DEBUG] Left Joystick released - Yaw reset to 0, Throttle:', joystickData.throttle);
         });
 
         // Right joystick: Pitch (Y) and Roll (X)
@@ -256,11 +259,14 @@
             // X axis -> Roll (right = positive)
             const rollNorm = Math.cos(data.angle.radian) * (data.force / 2);
             joystickData.roll = Math.round(rollNorm * 30);
+
+            console.log('[DEBUG] Right Joystick - Pitch:', joystickData.pitch, 'Roll:', joystickData.roll);
         });
 
         rightJoystick.on('end', () => {
             joystickData.roll = 0;
             joystickData.pitch = 0;
+            console.log('[DEBUG] Right Joystick released - Pitch and Roll reset to 0');
         });
 
         // Send joystick data at 20Hz
@@ -288,35 +294,150 @@
         });
 
         socket.on('connect', () => {
+            console.log('[DEBUG] Socket.IO connected successfully');
             document.getElementById('connectionStatus').textContent = 'Connected';
             document.getElementById('connectionStatus').style.background = '#4CAF50';
         });
 
-        socket.on('disconnect', () => {
+        socket.on('disconnect', (reason) => {
+            console.log('[DEBUG] Socket.IO disconnected. Reason:', reason);
             document.getElementById('connectionStatus').textContent = 'Disconnected';
             document.getElementById('connectionStatus').style.background = '#f44336';
         });
 
-        // Button functions
+        // Debug: Socket.IO error handling
+        socket.on('connect_error', (error) => {
+            console.error('[DEBUG] Socket.IO connection error:', error.message);
+            console.error('[DEBUG] Error details:', error);
+            document.getElementById('connectionStatus').textContent = 'Connection Error';
+            document.getElementById('connectionStatus').style.background = '#ff9800';
+        });
+
+        socket.on('reconnect', (attemptNumber) => {
+            console.log('[DEBUG] Socket.IO reconnected after', attemptNumber, 'attempts');
+        });
+
+        socket.on('reconnect_attempt', (attemptNumber) => {
+            console.log('[DEBUG] Socket.IO reconnection attempt #', attemptNumber);
+        });
+
+        socket.on('reconnect_error', (error) => {
+            console.error('[DEBUG] Socket.IO reconnection error:', error.message);
+        });
+
+        socket.on('reconnect_failed', () => {
+            console.error('[DEBUG] Socket.IO reconnection failed - all attempts exhausted');
+            document.getElementById('connectionStatus').textContent = 'Reconnect Failed';
+            document.getElementById('connectionStatus').style.background = '#f44336';
+        });
+
+        socket.on('error', (error) => {
+            console.error('[DEBUG] Socket.IO general error:', error);
+        });
+
+        // Debug: Arduino serial error from server
+        socket.on('arduino_error', (data) => {
+            console.error('[DEBUG] Arduino connection error:', data.message);
+            console.error('[DEBUG] Error type:', data.type);
+        });
+
+        // Button functions with error handling
         function arm() {
-            fetch('/arm', { method: 'POST' });
+            console.log('[DEBUG] Sending ARM command...');
+            fetch('/arm', { method: 'POST' })
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error(`HTTP error! status: ${response.status}`);
+                    }
+                    return response.json();
+                })
+                .then(data => {
+                    console.log('[DEBUG] ARM response:', data);
+                    if (data.arduino_responded) {
+                        console.log('[DEBUG] ✅ Arduino responded with:', data.msg);
+                        if (data.status === 'ok') {
+                            console.log('[DEBUG] ARM successful!');
+                        } else {
+                            console.error('[DEBUG] ARM failed:', data.msg);
+                            alert('ARM failed: ' + data.msg);
+                        }
+                    } else {
+                        console.error('[DEBUG] ❌ Arduino did NOT respond!');
+                        alert('Arduino not responding! Check connection.\nStatus: ' + data.status + '\nMessage: ' + data.msg);
+                    }
+                })
+                .catch(error => console.error('[DEBUG] ARM command failed:', error));
         }
 
         function disarm() {
-            fetch('/disarm', { method: 'POST' });
+            console.log('[DEBUG] Sending DISARM command...');
+            fetch('/disarm', { method: 'POST' })
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error(`HTTP error! status: ${response.status}`);
+                    }
+                    return response.json();
+                })
+                .then(data => {
+                    console.log('[DEBUG] DISARM response:', data);
+                    if (data.arduino_responded) {
+                        console.log('[DEBUG] ✅ Arduino responded with:', data.msg);
+                    } else {
+                        console.error('[DEBUG] ❌ Arduino did NOT respond!');
+                        alert('Arduino not responding! Check connection.');
+                    }
+                })
+                .catch(error => console.error('[DEBUG] DISARM command failed:', error));
             joystickData.throttle = 1000;
         }
 
         function takeoff() {
+            console.log('[DEBUG] Sending TAKEOFF command...');
             fetch('/takeoff', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ altitude: 1.0 })
-            });
+            })
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error(`HTTP error! status: ${response.status}`);
+                    }
+                    return response.json();
+                })
+                .then(data => {
+                    console.log('[DEBUG] TAKEOFF response:', data);
+                    if (data.arduino_responded) {
+                        console.log('[DEBUG] ✅ Arduino responded with:', data.msg);
+                        if (data.status !== 'ok') {
+                            alert('TAKEOFF failed: ' + data.msg);
+                        }
+                    } else {
+                        console.error('[DEBUG] ❌ Arduino did NOT respond!');
+                        alert('Arduino not responding! Check connection.');
+                    }
+                })
+                .catch(error => console.error('[DEBUG] TAKEOFF command failed:', error));
         }
 
         function land() {
-            fetch('/land', { method: 'POST' });
+            console.log('[DEBUG] Sending LAND command...');
+            fetch('/land', { method: 'POST' })
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error(`HTTP error! status: ${response.status}`);
+                    }
+                    return response.json();
+                })
+                .then(data => {
+                    console.log('[DEBUG] LAND response:', data);
+                    if (data.arduino_responded) {
+                        console.log('[DEBUG] ✅ Arduino responded with:', data.msg);
+                    } else {
+                        console.error('[DEBUG] ❌ Arduino did NOT respond!');
+                        alert('Arduino not responding! Check connection.');
+                    }
+                })
+                .catch(error => console.error('[DEBUG] LAND command failed:', error));
         }
     </script>
 </body>
